@@ -7,8 +7,44 @@ const cookieParser = require('cookie-parser');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const ENC_KEY = process.env.ENC_KEY || 'a3f1b9c7e2d4f6a8b0c1d2e3f4a5b6c7';
+const ENC_IV_LEN = 16;
+
+function decryptPayload(encStr) {
+  try {
+    const raw = Buffer.from(encStr, 'base64').toString('utf8');
+    const parsed = JSON.parse(raw);
+    const iv = Buffer.from(parsed.iv, 'hex');
+    const key = Buffer.from(ENC_KEY, 'utf8').slice(0, 32);
+    const padKey = Buffer.alloc(32);
+    key.copy(padKey);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', padKey, iv);
+    let dec = decipher.update(parsed.d, 'hex', 'utf8');
+    dec += decipher.final('utf8');
+    return JSON.parse(dec);
+  } catch (e) {
+    return null;
+  }
+}
+
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
+
+app.use('/api/trpc', (req, res, next) => {
+  if (req.method === 'POST' && req.body) {
+    const keys = Object.keys(req.body);
+    for (const k of keys) {
+      const item = req.body[k];
+      if (item && item.json && item.json._enc) {
+        const decrypted = decryptPayload(item.json._enc);
+        if (decrypted) {
+          req.body[k] = { json: decrypted };
+        }
+      }
+    }
+  }
+  next();
+});
 
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -399,6 +435,10 @@ app.all('/api/trpc/*', (req, res) => {
   }
 
   res.json(results);
+});
+
+app.get('/api/enc-config', (req, res) => {
+  res.json({ k: Buffer.from(ENC_KEY).toString('base64') });
 });
 
 // Visitor presence tracking
